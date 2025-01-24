@@ -1,0 +1,1126 @@
+using FACULTY_PORTAL.Models;
+using Microsoft.Reporting.WebForms;
+using System;
+using System.Collections.Generic;
+using System.Data;
+using System.Data.SqlClient;
+using System.Globalization;
+using System.Linq;
+using System.Web;
+using System.Web.Mvc;
+using System.Web.UI.WebControls;
+
+namespace FACULTY_PORTAL.Controllers
+{
+    public class DashboardController : Controller
+    {
+        private readonly DAL _dal = new DAL();
+
+        public ActionResult NewAward(string id)
+        {
+            if (Session["UID"] == null || string.IsNullOrEmpty(Session["UID"].ToString()))
+            {
+                return RedirectToAction("Login", "Account");
+            }
+
+            var courseInfo = GetCourseInfo(id);
+            if (courseInfo == null)
+            {
+                ViewBag.ErrorMessage = "Course information not found.";
+                return View();
+            }
+
+            var theoryData = GetCourseData(id, "Theory");
+            var labData = GetCourseData(id, "Lab");
+
+            var finalDataSet = CombineCourseData(theoryData, labData, courseInfo);
+
+            var assessmentInfo = GetAssessmentInfo(id);
+            var gradingRules = GetGradingRules(id);
+            var additionalInfo = GetAdditionalCourseInfo(id);
+
+            ViewBag.Assessment = assessmentInfo;
+            ViewBag.FinalData = finalDataSet;
+            ViewBag.GradeRules = gradingRules;
+            ViewBag.CourseInfo = additionalInfo;
+
+            return View();
+        }
+
+        private DataTable GetCourseInfo(string courseId)
+        {
+            var query = "SELECT t, L FROM CourseinfoAll WHERE id = @CourseId";
+            return _dal.ExecuteQuery(query, new SqlParameter("@CourseId", courseId)).Tables[0];
+        }
+
+        private DataSet GetCourseData(string courseId, string type)
+        {
+            var query = "EXEC PROCFinalResultgradeNew @semid = @CourseId, @TL = @Type";
+            return _dal.ExecuteQuery(query,
+                new SqlParameter("@CourseId", courseId),
+                new SqlParameter("@Type", type));
+        }
+
+        private DataSet CombineCourseData(DataSet theoryData, DataSet labData, DataTable courseInfo)
+        {
+            var theory = Convert.ToInt32(courseInfo.Rows[0]["t"]);
+            var lab = Convert.ToInt32(courseInfo.Rows[0]["L"]);
+
+            // Combine logic for theory and lab datasets (to be implemented)
+            return new DataSet();
+        }
+
+        private DataTable GetAssessmentInfo(string courseId)
+        { 
+            var query = "SELECT type, TotalMarks, CASE WHEN status = 0 THEN 'Not Submitted' ELSE 'Submitted' END AS Status " +
+                        "FROM Semestercourses_weightage INNER JOIN SemesterCourse_WeightageDetail " +
+                        "ON SemesterCourse_WeightageDetail.SemesterCourseWeightage_ID = Semestercourses_weightage.ID " +
+                        "WHERE SemCoursesInfoID = @CourseId ORDER BY Semestercourses_weightage.id";
+
+            return _dal.ExecuteQuery(query, new SqlParameter("@CourseId", courseId)).Tables[0];
+        }
+
+        private DataTable GetGradingRules(string courseId)
+        {
+            var query = "SELECT * FROM Semester_Grade_Rules WHERE SemCrsID = @CourseId";
+            return _dal.ExecuteQuery(query, new SqlParameter("@CourseId", courseId)).Tables[0];
+        }
+
+        private DataTable GetAdditionalCourseInfo(string courseId)
+        {
+            var query = "SELECT DISTINCT Semester_Course_Relative.*, scheme, coursecode, CourseName, CreditHrs, EmpName, " +
+                        "Student_Course_Enrollment_count.STD_COUNT FROM (SELECT MAX(ID) AS ID, SemCourseInfoID FROM Semester_Course_Relative GROUP BY SemCourseInfoID) AS t " +
+                        "INNER JOIN Semester_Course_Relative ON Semester_Course_Relative.ID = t.ID " +
+                        "RIGHT OUTER JOIN Student_Course_Enrollment_count ON Student_Course_Enrollment_count.SemCourseID = Semester_Course_Relative.SemCourseInfoID " +
+                        "WHERE Student_Course_Enrollment_count.SemCourseID = @CourseId";
+
+            return _dal.ExecuteQuery(query, new SqlParameter("@CourseId", courseId)).Tables[0];
+        }
+        //COE K LIYE DASHBOARD
+        public ActionResult Index()
+        {
+            if (Session["semsessionno"] == null)
+            {
+                return RedirectToAction("Login", "Account");
+            }
+
+            var enrollmentCount = GetEnrollmentCount(Session["semsessionno"].ToString());
+            var courseCount = GetCourseCount(Session["semsessionno"].ToString());
+            var resultHistory = GetResultHistory(Session["semsessionno"].ToString());
+
+            ViewBag.Enrollment = enrollmentCount;
+            ViewBag.CourseCount = courseCount;
+            ViewBag.ResultHistory = resultHistory;
+
+            return View();
+        }
+
+        private int GetEnrollmentCount(string sessionId)
+        {
+            var query = "SELECT COUNT(DISTINCT StdRollNo) FROM Student_Course_Enrollment WHERE SemesterSessionID = @SessionId";
+            var result = _dal.ExecuteQuery(query, new SqlParameter("@SessionId", sessionId));
+            return Convert.ToInt32(result.Tables[0].Rows[0][0]);
+        }
+
+        private int GetCourseCount(string sessionId)
+        {
+            var query = "SELECT COUNT(*) FROM CourseinfoAll WHERE SemesterSessionID = @SessionId";
+            var result = _dal.ExecuteQuery(query, new SqlParameter("@SessionId", sessionId));
+            return Convert.ToInt32(result.Tables[0].Rows[0][0]);
+        }
+
+        private DataTable GetResultHistory(string sessionId)
+        {
+            var query = "SELECT coursesubmissionstatus.Status FROM CourseinfoAll " +
+                        "INNER JOIN SemesterCoursesInfo ON SemesterCoursesInfo.id = CourseinfoAll.id " +
+                        "INNER JOIN DegreeBatchInfo ON DegreeBatchInfo.id = SemesterCoursesInfo.DegreeBatchID " +
+                        "INNER JOIN DegreeInfo ON DegreeInfo.id = DegreeBatchInfo.DegreeID " +
+                        "INNER JOIN Departments ON Departments.id = DegreeInfo.DepartmentID " +
+                        "INNER JOIN Faculty ON Faculty.ID = Departments.Faculty " +
+                        "LEFT OUTER JOIN coursesubmissionstatus ON coursesubmissionstatus.id = CourseinfoAll.id " +
+                        "WHERE CourseinfoAll.SemesterSessionID = @SessionId";
+
+            return _dal.ExecuteQuery(query, new SqlParameter("@SessionId", sessionId)).Tables[0];
+        }
+        [HttpPost]
+        public ActionResult updateattendance(FormCollection f)
+        {
+            string percntage = f["percntage"];
+            DAL d = new DAL();
+            d.conn_open();
+            string s = "update CurrentSessionInfo set Attendance = '" + percntage + "' ";
+            d.command(s);
+            d.conn_close();
+            return RedirectToAction("Index", "ViceChancellor");
+        }
+        [HttpPost]
+        public ActionResult updatebalance(FormCollection f)
+        {
+            string balance = f["balance"];
+            DAL d = new DAL();
+            d.conn_open();
+            string s = "update CurrentSessionInfo set Balance = '" + balance + "' ";
+            d.command(s);
+            d.conn_close();
+            return RedirectToAction("Index", "ViceChancellor");
+        }
+        public ActionResult Dashboards()
+        {
+            string uid = Session["UID"].ToString();
+            DAL d = new DAL();
+            DataSet ds = new DataSet();
+            string s = "select * from CourseinfoAll inner join SemesterCoursesInfo on SemesterCoursesInfo.id	= CourseinfoAll.ID inner join DegreeBatchInfo on DegreeBatchInfo.ID = SemesterCoursesInfo.DegreeBatchID  inner join DegreeInfo on DegreeInfo.id = DegreeBatchInfo.DegreeID inner join Departments on Departments.ID = DegreeInfo.DepartmentID inner join Faculty on Faculty.ID= Departments.Faculty inner join FacultyInfo on FacultyInfo.id = Departments.HoD or FacultyInfo.id = Faculty.DeanID where FacultyInfo.uid =  " + uid + " and   CourseinfoAll.SemesterSessionID  = " + Session["semsessionno"].ToString();
+            ds = d.Select(s);
+            int crsCount = ds.Tables[0].Rows.Count;
+            ViewBag.crsCount = crsCount;
+            ds.Tables[0].Rows.Clear();
+            ds.Tables[0].Columns.Clear();
+            s = "select count(distinct stdrollno) from Student_Course_Enrollment inner join DegreeInfo on Student_Course_Enrollment.DegreeID = DegreeInfo.DegreeName inner join Departments on Departments.id = DegreeInfo.DepartmentID inner join Faculty on Faculty.ID= Departments.Faculty inner join FacultyInfo on FacultyInfo.id = Departments.HoD or FacultyInfo.id = Faculty.DeanID where FacultyInfo.uid =  " + uid + " and SemesterSessionID  ='" + Session["semsessionno"].ToString() + "'";
+            ds = d.Select(s);
+            ViewBag.Evaluation_courses = ds.Tables[0].Rows[0][0].ToString();
+            ds.Tables[0].Rows.Clear();
+            ds.Tables[0].Columns.Clear();
+            s = "select * from Student_Course_Enrollment  inner join DegreeInfo on Student_Course_Enrollment.DegreeID = DegreeInfo.DegreeName inner join Departments on Departments.id = DegreeInfo.DepartmentID inner join Faculty on Faculty.ID= Departments.Faculty inner join FacultyInfo on FacultyInfo.id = Departments.HoD or FacultyInfo.id = Faculty.DeanID where FacultyInfo.uid =  " + uid + " and SemesterSessionID = '" + Session["semsessionno"].ToString() + "' ";
+            ds = d.Select(s);
+
+            //my code start
+            try
+            {
+                ViewBag.totalenroll = ds.Tables[0].Rows.Count;
+                int totalenroll = Convert.ToInt32(ds.Tables[0].Rows[0][0].ToString());
+            }
+            catch (IndexOutOfRangeException e)
+            {
+                ViewBag.totalenroll = "";
+                int totalenroll = 0;
+            }
+            
+            // my code end
+
+
+            ds.Tables[0].Rows.Clear();
+            ds.Tables[0].Columns.Clear();
+            s = "select * from COATaskList where SemesterSession ='" + Session["semsession"].ToString() + "' ";
+            ds = d.Select(s);
+            int[] total = new int[6];
+            total[0] = ds.Tables[0].Select("OATaskID=2 and CurrentStatus = 'In Progress'").Length;
+            total[1] = ds.Tables[0].Select("OATaskID=3 and CurrentStatus = 'In Progress'").Length;
+            total[2] = ds.Tables[0].Select("OATaskID=4 and CurrentStatus = 'In Progress'").Length;
+            total[3] = ds.Tables[0].Select("OATaskID=2 and CurrentStatus = 'Completed'").Length;
+            total[4] = ds.Tables[0].Select("OATaskID=3 and CurrentStatus = 'Completed'").Length;
+            total[5] = ds.Tables[0].Select("OATaskID=4 and CurrentStatus = 'Completed'").Length;
+            ViewBag.enrollmentstatuses = total;
+            ds.Tables[0].Rows.Clear();
+            ds.Tables[0].Columns.Clear();
+            s = "select per from StudentAttendancePivot right outer join Student_Course_Enrollment on Student_Course_Enrollment.StdCourseID = StudentAttendancePivot.StdCourseID inner join DegreeInfo on Student_Course_Enrollment.DegreeID = DegreeInfo.DegreeName inner join Departments on Departments.id = DegreeInfo.DepartmentID inner join Faculty on Faculty.ID= Departments.Faculty inner join FacultyInfo on FacultyInfo.id = Departments.HoD or FacultyInfo.id = Faculty.DeanID where FacultyInfo.uid =  " + uid + " and SemesterSessionID = '" + Session["semsessionno"].ToString() + "'";
+            ds = d.Select(s);
+            int[] per = new int[5];
+            per[0] = ds.Tables[0].Select("per>=80").Length;
+            per[1] = ds.Tables[0].Select("(per>=75 and per< 80)").Length;
+            per[2] = ds.Tables[0].Select("per>=70 and per< 75").Length;
+            per[3] = ds.Tables[0].Select("per>=60 and per< 70").Length;
+            per[4] = ds.Tables[0].Select("per<60").Length;
+            ViewBag.attendance = per;
+            ds.Tables[0].Rows.Clear();
+            ds.Tables[0].Columns.Clear();
+            s = "select DegreeID,case when [1-SF] is null then 0 else [1-SF] end '1-SF',case when [2-SF] is null then 0 else [2-SF] end '2-SF',case when [3-SF] is null then 0 else [3-SF] end '3-SF',case when [Sports] is null then 0 else [Sports] end 'Sports' from (select DegreeID,count(distinct StdRollNo) as stdroll,Category from Student_Course_Enrollment  inner join DegreeInfo on Student_Course_Enrollment.DegreeID = DegreeInfo.DegreeName inner join Departments on Departments.id = DegreeInfo.DepartmentID inner join Faculty on Faculty.ID= Departments.Faculty inner join FacultyInfo on FacultyInfo.id = Departments.HoD or FacultyInfo.id = Faculty.DeanID where FacultyInfo.uid =  " + uid + " and SemesterSessionID = '" + Session["semsessionno"].ToString() + "' GROUP BY DegreeID,Category ) as pv pivot (max (stdroll) for category in ([1-SF],[2-SF],[3-SF],[Sports]) )PV1 ";
+            ds = d.Select(s);
+            string[,] catdegre = Double_Array_store(ds);
+            ViewBag.catdegre = catdegre;
+            ds.Tables[0].Rows.Clear();
+            ds.Tables[0].Columns.Clear();
+            s = "select DName,case when [1-SF] is null then 0 else [1-SF] end '1-SF',case when [2-SF] is null then 0 else [2-SF] end '2-SF',case when [3-SF] is null then 0 else [3-SF] end '3-SF',case when [Sports] is null then 0 else [Sports] end 'Sports' from (select Student_Course_Enrollment.DName,count(distinct StdRollNo) as stdroll,Category from Student_Course_Enrollment  inner join DegreeInfo on Student_Course_Enrollment.DegreeID = DegreeInfo.DegreeName inner join Departments on Departments.id = DegreeInfo.DepartmentID inner join Faculty on Faculty.ID= Departments.Faculty inner join FacultyInfo on FacultyInfo.id = Departments.HoD or FacultyInfo.id = Faculty.DeanID where FacultyInfo.uid =  " + uid + " and SemesterSessionID = '" + Session["semsessionno"].ToString() + "' GROUP BY Student_Course_Enrollment.DName,Category ) as pv pivot (max (stdroll) for category in ([1-SF],[2-SF],[3-SF],[Sports]) )PV1 ";
+            ds = d.Select(s);
+            string[,] catdpt = Double_Array_store(ds);
+            ViewBag.catdpt = catdpt;
+            ds.Tables[0].Rows.Clear();
+            ds.Tables[0].Columns.Clear();
+            s = "select JoiningSession,DegreeID,ClassSection,count(distinct StdRollNo) from Student_Course_Enrollment  inner join DegreeInfo on Student_Course_Enrollment.DegreeID = DegreeInfo.DegreeName  inner join Departments on Departments.id = DegreeInfo.DepartmentID inner join Faculty on Faculty.ID= Departments.Faculty  inner join FacultyInfo on FacultyInfo.id = Departments.HoD or  FacultyInfo.id = Faculty.DeanID where FacultyInfo.uid =  " + uid + " and SemesterSessionID = '" + Session["semsessionno"].ToString() + "' group by JoiningSession,DegreeID,ClassSection ";
+            ds = d.Select(s);
+            String[,] SecStrength = Double_Array_store(ds);
+            ViewBag.SecStrength = SecStrength;
+            ds.Tables[0].Rows.Clear();
+            ds.Tables[0].Columns.Clear();
+            s = "select *,male+ female Total from (select  degree , case when male is null then 0 else male end male,case when female is null then 0 else female end female from (select count(distinct stdrollno) Students,  degreeid + ' ' + JoiningSession degree, Student_Course_Enrollment.Gender From Student_Course_Enrollment inner join DegreeInfo on DegreeInfo.DegreeName = Student_Course_Enrollment.DegreeID inner join Departments on Departments.ID = DegreeInfo.DepartmentID inner join Faculty on Faculty.ID = Departments.Faculty inner join FacultyInfo on FacultyInfo.id = Departments.HoD or FacultyInfo.ID = Faculty.DeanID where FacultyInfo.UID = " + Session["UID"].ToString() + " and SemesterSessionID = " + Session["semsessionno"].ToString() + " group by degreeid, JoiningSession,Student_Course_Enrollment.Gender ) as T pivot( max(students) for gender in ([Male], [Female]) )as PT) as T ";
+            ds = d.Select(s);
+            String[,] GenderStrength = Double_Array_store(ds);
+            ViewBag.GenderStrength = GenderStrength;
+
+            ds.Tables[0].Rows.Clear();
+            ds.Tables[0].Columns.Clear();
+            s = "select DegreeID,count(StdRollNo) from Student_Course_Enrollment inner join DegreeInfo on DegreeInfo.DegreeName = Student_Course_Enrollment.DegreeID inner join Departments on Departments.ID = DegreeInfo.DepartmentID inner join Faculty on Faculty.ID = Departments.Faculty  inner join FacultyInfo on FacultyInfo.id = Departments.HoD or FacultyInfo.ID = Faculty.DeanID inner join StudentAttendancePivot on StudentAttendancePivot.StdCourseID = Student_Course_Enrollment.StdCourseID where FacultyInfo.UID = " + Session["UID"].ToString() + " and SemesterSessionID = " + Session["semsessionno"].ToString() + " and per<(select Attendance from CurrentSessionInfo) group by DegreeID ";
+            ds = d.Select(s);
+            String[,] shrtdegreewise = Double_Array_store(ds);
+            ViewBag.shrtdegreewise = shrtdegreewise;
+            return View();
+        }
+        public ActionResult Hodcourses()
+        {
+            DAL d = new DAL();
+            DataSet ds = new DataSet();
+            string s = "select coursecode, CourseName, EmpName,student_course_enrollment.DegreeName, student_course_enrollment.SemesterSession,count(stdrollno) as Count from student_course_enrollment inner join DegreeInfo on degreeinfo.DegreeName = Student_Course_Enrollment.DegreeID inner join Departments on Departments.id = DegreeInfo.DepartmentID inner join Faculty on Faculty.ID= Departments.Faculty inner join FacultyInfo on FacultyInfo.id = Departments.HoD or FacultyInfo.id = Faculty.DeanID where FacultyInfo.uid =  " +Session["UID"].ToString()+ " and semestersessionid = " +Session["semsessionno"].ToString()+ "  group by coursecode, CourseName, EmpName, student_course_enrollment.DegreeName, student_course_enrollment.SemesterSession";
+            ds = d.Select(s);
+            int c = ds.Tables[0].Columns.Count;
+            int r = ds.Tables[0].Rows.Count;
+            string[,] final = new string[r, c];
+            final = Array_store(ds.Tables[0]);
+            ViewBag.Final = final;
+            return View();
+        }
+        public ActionResult StudentAttendance()
+        {
+            DAL d = new DAL();
+            DataSet ds = new DataSet();
+            string s = "select StdRollNo as StudentRollNo, StudentName StudentName, DegreeID as Degree, JoiningSession, SemesterSession, CourseCode, CourseName, EmpName as TeacherName, Present , ABS as Absent, per as Presents  from Student_Course_Enrollment left outer join StudentAttendancePivot on StudentAttendancePivot.StdCourseID = Student_Course_Enrollment.StdCourseID inner join DegreeInfo on Student_Course_Enrollment.DegreeID = DegreeInfo.DegreeName inner join Departments on Departments.id = DegreeInfo.DepartmentID inner join Faculty on Faculty.ID= Departments.Faculty inner join FacultyInfo on FacultyInfo.id = Departments.HoD or FacultyInfo.id = Faculty.DeanID where FacultyInfo.uid =  " +Session["UID"].ToString()+ " and SemesterSessionID  =" +Session["semsessionno"].ToString()+ " ";
+            ds = d.Select(s);
+            int c = ds.Tables[0].Columns.Count;
+            int r = ds.Tables[0].Rows.Count;
+            string[,] final = new string[r, c];
+            final = Array_store(ds.Tables[0]);
+            ViewBag.Final = final;
+            return View("~/Views/Finance/Report.cshtml");
+        }
+        public ActionResult HodCheckTimeTable()
+        {
+            return View();
+        }
+        [HttpPost]
+        public ActionResult HodCheckTimeTable(FormCollection f)
+        {
+            string day = f["day"];
+            DAL d = new DAL();
+            DataSet ds = new DataSet();
+            string s = "exec PROCDailyTimeTable @SemSessionId = " +Session["semsessionno"].ToString()+ ",@UID = " +Session["UID"].ToString()+ ",@Day='" +day+ "'";
+            ds = d.Select(s);
+            int count = ds.Tables[0].Rows.Count;
+            if (count > 0)
+            {
+                string[,] data = Double_Array_store(ds);
+                ViewBag.data = data;
+            }
+            ViewBag.count = count;
+            return View();
+        }
+        public ActionResult notconfig(string status)
+        {
+            DAL d = new DAL();
+            DataSet ds = new DataSet();
+            string s = "";
+            if (status == "1")
+            {
+                s = "select CourseName,CourseCode,CreditHrs,(select EmpName from users where id = Semestercourses_weightage.UID) from SemesterCoursesInfo inner join Semestercourses_weightage on Semestercourses_weightage.SemCoursesInfoID = SemesterCoursesInfo.ID inner join SemesterCourse_WeightageDetail on SemesterCourse_WeightageDetail.SemesterCourseWeightage_ID = Semestercourses_weightage.ID where SemesterSessionID = " + Session["semsessionno"].ToString() + " and SemesterCourse_WeightageDetail.id not in ( select Student_MarksDetails.SemCourseWDetailID from Student_MarksDetails ) and Type = 'Mid Term' ";
+            }
+            else if (status == "2")
+            {
+                s = "select CourseName,CourseCode,CreditHrs,(select EmpName from users where id = Semestercourses_weightage.UID) from SemesterCoursesInfo inner join Semestercourses_weightage on Semestercourses_weightage.SemCoursesInfoID = SemesterCoursesInfo.ID inner join SemesterCourse_WeightageDetail on SemesterCourse_WeightageDetail.SemesterCourseWeightage_ID = Semestercourses_weightage.ID where SemesterSessionID = " + Session["semsessionno"].ToString() + " and SemesterCourse_WeightageDetail.id not in ( select Student_MarksDetails.SemCourseWDetailID from Student_MarksDetails ) and Type = 'Final Term' ";
+            }
+            else
+            {
+                s = "";
+            }
+            ds = d.Select(s);
+            string[,] data = new string[0, 0];
+            int count = ds.Tables[0].Rows.Count;
+            if (count > 0)
+            {
+                data = Double_Array_store(ds);
+            }
+            ViewBag.count = count;
+            ViewBag.data = data;
+            return View();
+        }
+        public ActionResult student365()
+        {
+            //inner join Faculty on Faculty.ID = Departments.Faculty inner join FacultyInfo on FacultyInfo.id = Departments.HoD or FacultyInfo.id = Faculty.DeanID where FacultyInfo.uid = " + Session["UID"].ToString() + "
+            DAL d = new DAL();
+            DataSet ds = new DataSet();
+            string degree = "Select DegreeName from Degreeinfo inner join Departments on Departments.id = DegreeInfo.DepartmentID ";
+            ds = d.Select(degree);
+            ViewBag.Drows = ds.Tables[0].Rows.Count;
+            string[,] DegreeArray = new string[ViewBag.Drows, 1];
+            for (int i = 0; i < ViewBag.Drows; i++)
+            {
+                DegreeArray[i, 0] = ds.Tables[0].Rows[i][0].ToString();
+            }
+            ds.Clear();
+            ds.Tables[0].Columns.Clear();
+            string batch = "select SemesterSession from SemesterSessionInfo";
+            ds = d.Select(batch);
+            ViewBag.Brows = ds.Tables[0].Rows.Count;
+            string[,] BatchArray = new string[ViewBag.Brows, 1];
+            string[] data = new string[16];
+            for (int i = 0; i < ViewBag.Brows; i++)
+            {
+                BatchArray[i, 0] = ds.Tables[0].Rows[i][0].ToString();
+            }
+            ds.Clear();
+            ds.Tables[0].Columns.Clear();
+            for (int i = 0; i < 8; i++)
+            {
+                data[i] = "";
+            }
+            string[,] Semester = new string[0, 4];
+            for (int i = 0; i < ds.Tables[0].Rows.Count; i++)
+            {
+                Semester[i, 0] = "";
+                Semester[i, 1] = "";
+                Semester[i, 2] = "";
+                Semester[i, 3] = "";
+            }
+            string[,] FeeDetails = new string[ds.Tables[0].Rows.Count, 7];
+            for (int i = 0; i < ds.Tables[0].Rows.Count; i++)
+            {
+                FeeDetails[i, 0] = "";
+                FeeDetails[i, 1] = "";
+                FeeDetails[i, 2] = "";
+                FeeDetails[i, 3] = "";
+                FeeDetails[i, 4] = "";
+                FeeDetails[i, 5] = "";
+                FeeDetails[i, 6] = "";
+                FeeDetails[i, 7] = "";
+            }
+            ViewBag.Ledger = FeeDetails;
+            ViewBag.SemesterData = Semester;
+            ViewBag.Degree = DegreeArray;
+            ViewBag.Batch = BatchArray;
+            ViewBag.Data = data;
+            return View();
+        }
+        [HttpPost]
+        public ActionResult student365(FormCollection f)
+        {
+            //inner join Faculty on Faculty.ID = Departments.Faculty inner join FacultyInfo on FacultyInfo.id = Departments.HoD or FacultyInfo.id = Faculty.DeanID where FacultyInfo.uid = " + Session["UID"].ToString() + "
+            DAL d = new DAL();
+            DataSet ds = new DataSet();
+            string degree = "Select DegreeName from Degreeinfo inner join Departments on Departments.id = DegreeInfo.DepartmentID";
+            ds = d.Select(degree);
+            ViewBag.Drows = ds.Tables[0].Rows.Count;
+            string[,] DegreeArray = new string[ViewBag.Drows, 1];
+            for (int i = 0; i < ViewBag.Drows; i++)
+            {
+                DegreeArray[i, 0] = ds.Tables[0].Rows[i][0].ToString();
+            }
+            ds.Clear();
+            ds.Tables[0].Columns.Clear();
+            string batch = "select SemesterSession from SemesterSessionInfo";
+            ds = d.Select(batch);
+            ViewBag.Brows = ds.Tables[0].Rows.Count;
+            string[,] BatchArray = new string[ViewBag.Brows, 1];
+            for (int i = 0; i < ViewBag.Brows; i++)
+            {
+                BatchArray[i, 0] = ds.Tables[0].Rows[i][0].ToString();
+            }
+            ds.Clear();
+            ds.Tables[0].Columns.Clear();
+            ViewBag.Degree = DegreeArray;
+            ViewBag.Batch = BatchArray;
+            string B = f["Batch"];
+            string D = f["Degree"];
+            string rollNo = f["rollNo"];
+            string StdRollNo = B + "/" + D + "/" + rollNo;
+            ViewBag.roll = StdRollNo + ".PNG";
+            string s = "select StdRollNo,UETRegNo,StudentName,FatherName,NIC,Convert(varchar,DOB,106) as DOB,Gender,MailingAddress,Email,ParentEmployer,Designation,PhoneHome as GuardianPhone,PhoneMobilePrimary,DegreeID,JoiningSession,Category, ID, CGPA  from studentinfo Where StdRollNo='" + StdRollNo + "'";
+            ds = d.Select(s);
+            ViewBag.total = ds.Tables[0].Rows.Count;
+            string[] array = new string[18];
+            array[0] = ds.Tables[0].Rows[0][0].ToString();
+            array[1] = ds.Tables[0].Rows[0][1].ToString();
+            array[2] = ds.Tables[0].Rows[0][2].ToString();
+            array[3] = ds.Tables[0].Rows[0][3].ToString();
+            array[4] = ds.Tables[0].Rows[0][4].ToString();
+            array[5] = ds.Tables[0].Rows[0][5].ToString();
+            array[6] = ds.Tables[0].Rows[0][6].ToString();
+            array[7] = ds.Tables[0].Rows[0][7].ToString();
+            array[8] = ds.Tables[0].Rows[0][8].ToString();
+            array[9] = ds.Tables[0].Rows[0][9].ToString();
+            array[10] = ds.Tables[0].Rows[0][10].ToString();
+            array[11] = ds.Tables[0].Rows[0][11].ToString();
+            array[12] = ds.Tables[0].Rows[0][12].ToString();
+            array[13] = ds.Tables[0].Rows[0][13].ToString();
+            array[14] = ds.Tables[0].Rows[0][14].ToString();
+            array[15] = ds.Tables[0].Rows[0][15].ToString();
+            array[16] = ds.Tables[0].Rows[0][16].ToString();
+            array[17] = ds.Tables[0].Rows[0][17].ToString();
+            ds.Clear();
+            ds.Tables[0].Columns.Clear();
+            s = "select SemesterSessionInfo.SemesterSession,StudentAttendancePivot.StdCourseID,CourseCode,CourseName,CreditHrs,EmpName,present,ABS,per,Student_Course_Enrollment.SemCourseID from StudentAttendancePivot right outer join Student_Course_Enrollment on StudentAttendancePivot.StdCourseID=Student_Course_Enrollment.StdCourseID inner join SemesterSessionInfo on SemesterSessionInfo.ID=Student_Course_Enrollment.SemesterSessionID Where STDRollNo='" + StdRollNo + "' order by SemesterSession";
+            ds = d.Select(s);
+            string[,] Semester = new string[ds.Tables[0].Rows.Count, 10];
+            for (int i = 0; i < ds.Tables[0].Rows.Count; i++)
+            {
+                Semester[i, 0] = ds.Tables[0].Rows[i][0].ToString();
+                Semester[i, 1] = ds.Tables[0].Rows[i][1].ToString();
+                Semester[i, 2] = ds.Tables[0].Rows[i][2].ToString();
+                Semester[i, 3] = ds.Tables[0].Rows[i][3].ToString();
+                Semester[i, 4] = ds.Tables[0].Rows[i][4].ToString();
+                Semester[i, 5] = ds.Tables[0].Rows[i][5].ToString();
+                Semester[i, 6] = ds.Tables[0].Rows[i][6].ToString();
+                Semester[i, 7] = ds.Tables[0].Rows[i][7].ToString();
+                Semester[i, 8] = ds.Tables[0].Rows[i][8].ToString();
+                Semester[i, 9] = ds.Tables[0].Rows[i][9].ToString();
+            }
+            ViewBag.SemesterData = Semester;
+            ds.Clear();
+            ds.Tables[0].Rows.Clear();
+            ds.Tables[0].Columns.Clear();
+            s = "Select  SemesterSessionID,SemesterSession,feepayable, FeeReceived, PreviousOutstanding,AdditionalFee,TotalOutstanding,FeeRemaining ,SemesterLeave,'SGPA' from StudentRegistrationInfo inner join StudentInfo on StudentRegistrationInfo.StdRollNoID = StudentInfo.id inner join SemesterSessionInfo on SemesterSessionInfo.id = StudentRegistrationInfo.SemesterSessionID Where StdRollNo = '" + StdRollNo + "' order by SemesterSession";
+            ds = d.Select(s);
+            string[,] FeeDetails = new string[ds.Tables[0].Rows.Count, 10];
+            for (int i = 0; i < ds.Tables[0].Rows.Count; i++)
+            {
+                FeeDetails[i, 0] = ds.Tables[0].Rows[i][0].ToString();
+                FeeDetails[i, 1] = ds.Tables[0].Rows[i][1].ToString();
+                FeeDetails[i, 2] = ds.Tables[0].Rows[i][2].ToString();
+                FeeDetails[i, 3] = ds.Tables[0].Rows[i][3].ToString();
+                FeeDetails[i, 4] = ds.Tables[0].Rows[i][4].ToString();
+                FeeDetails[i, 5] = ds.Tables[0].Rows[i][5].ToString();
+                FeeDetails[i, 6] = ds.Tables[0].Rows[i][6].ToString();
+                FeeDetails[i, 7] = ds.Tables[0].Rows[i][7].ToString();
+                FeeDetails[i, 8] = ds.Tables[0].Rows[i][8].ToString();
+                FeeDetails[i, 9] = ds.Tables[0].Rows[i][9].ToString();
+            }
+            ds.Clear();
+            ds.Tables[0].Rows.Clear();
+            ds.Tables[0].Columns.Clear();
+            s = "select (select SemesterSession from SemesterSessionInfo where id = MAX(SemesterSessionID)),(select (FeePayable-RebateAmount)-FeeReceived as total from StudentRegistrationInfo where StdRollNoID = (select id from StudentInfo where StdRollNo = '" + StdRollNo + "') and SemesterSessionID = max(Student_Course_Enrollment.SemesterSessionID)) from Student_Course_Enrollment where StdRollNo = '" + StdRollNo + "'";
+            ds = d.Select(s);
+            ViewBag.lastsemester = ds.Tables[0].Rows[0][0].ToString();
+            //decimal fee = Convert.ToDecimal(ds.Tables[0].Rows[0][1].ToString());
+            //Edit by waleed khalid 
+            decimal fee = 0;
+            ///////////
+            string defaulter = "Defaulter";
+            if (fee > 60)
+            {
+
+            }
+            else
+            {
+                defaulter = "Not A Defaulter";
+            }
+            ds.Clear();
+            ds.Tables[0].Rows.Clear();
+            ds.Tables[0].Columns.Clear();
+            s = "select LastDegree,Institute,convert(varchar,StartingYear,106) ,convert(varchar,CompletitionYear,106) from StudentEducationalInfo where StdInfoID = (select id from studentinfo where stdrollno = '" + StdRollNo + "')";
+            ds = d.Select(s);
+            int admcount = ds.Tables[0].Rows.Count;
+            string[,] admissioninfo = new string[0, 0];
+            if (admcount > 0)
+            {
+                admissioninfo = Double_Array_store(ds);
+            }
+
+           
+            ViewBag.admcount = admcount;
+            ViewBag.admissioninfo = admissioninfo;
+            ViewBag.defaulter = defaulter;
+            ViewBag.StdrollNo = StdRollNo;
+            ViewBag.Ledger = FeeDetails;
+            ViewBag.SemesterData = Semester;
+            ViewBag.data = array;
+
+
+
+            ds.Clear();
+            ds.Tables[0].Rows.Clear();
+            ds.Tables[0].Columns.Clear();
+            s = "select SemesterSessionInfo.SemesterSession,'CGPA','SGPA',Exam_AcademicStandingRules.id,StudentRegistrationInfo.id from StudentRegistrationInfo left outer join Exam_AcademicStandingRules on StudentRegistrationInfo.AcaStdID = Exam_AcademicStandingRules.ID inner join SemesterSessionInfo on SemesterSessionInfo.id = StudentRegistrationInfo.SemesterSessionID where StdRollNoID = (select id from studentinfo where stdrollno = '" + StdRollNo + "') order by SemesterSessionInfo.ID";
+            ds = d.Select(s);
+            int ACAcount = ds.Tables[0].Rows.Count;
+            if (ACAcount > 0)
+            {
+                string[,] AcAstanding = Double_Array_store(ds);
+                ViewBag.AcAstanding = AcAstanding;
+            }
+            ViewBag.ACAcount = ACAcount;
+
+
+            ds.Clear();
+            ds.Tables[0].Rows.Clear();
+            ds.Tables[0].Columns.Clear();
+            s = "select ID,AcademicStanding from Exam_AcademicStandingRules";
+            ds = d.Select(s);
+            int ACARulescount = ds.Tables[0].Rows.Count;
+            if (ACARulescount > 0)
+            {
+                string[,] AcAstandingRules = Double_Array_store(ds);
+                ViewBag.AcAstandingRules = AcAstandingRules;
+            }
+            ViewBag.ACARulescount = ACARulescount;
+
+            return View();
+        }
+
+
+        [HttpPost]
+        public ActionResult updateAcademicStanding(FormCollection f)
+        {
+            DAL d = new DAL();
+            string stdregid = f["stdregid"];
+            string standing = f["standing"];
+            string CGPA = f["CGPA"];
+            string stdid = f["stdid"];
+            d.conn_open();
+            string s = "update StudentInfo set CGPA = '"+ CGPA + "' where ID = " + stdid + "";
+            d.command(s);
+            d.conn_close();
+            d.conn_open();
+            s = "update StudentRegistrationInfo set AcaStdID = " + standing + " where id = " + stdregid + "";
+            d.command(s);
+            d.conn_close();
+            return RedirectToAction("student365", "Dashboard");
+        }
+
+        public ActionResult courses()
+        {
+            DAL d = new DAL();
+            DataSet ds = new DataSet();
+            string s = "select * from CourseDetailInfo where uid = " + Session["UID"].ToString() + " and semestersessionid = " + Session["Semsessionno"].ToString() + "";
+            ds = d.Select(s);
+            string[,] info = Double_Array_store(ds);
+            ViewBag.info = info;
+            return View();
+        }
+        public ActionResult Student()
+        {
+            DAL d = new DAL();
+            DataSet ds = new DataSet();
+            string degree = "Select DegreeName from Degreeinfo";
+            ds = d.Select(degree);
+            ViewBag.Drows = ds.Tables[0].Rows.Count;
+            string[,] DegreeArray = new string[ViewBag.Drows, 1];
+            for (int i = 0; i < ViewBag.Drows; i++)
+            {
+                DegreeArray[i, 0] = ds.Tables[0].Rows[i][0].ToString();
+            }
+            ds.Clear();
+            ds.Tables[0].Columns.Clear();
+            string batch = "select SemesterSession from SemesterSessionInfo";
+            ds = d.Select(batch);
+            ViewBag.Brows = ds.Tables[0].Rows.Count;
+            string[,] BatchArray = new string[ViewBag.Brows, 1];
+            string[] data = new string[16];
+            for (int i = 0; i < ViewBag.Brows; i++)
+            {
+                BatchArray[i, 0] = ds.Tables[0].Rows[i][0].ToString();
+            }
+            ds.Clear();
+            ds.Tables[0].Columns.Clear();
+            for (int i = 0; i < 8; i++)
+            {
+                data[i] = "";
+            }
+            string[,] Semester = new string[0, 4];
+            for (int i = 0; i < ds.Tables[0].Rows.Count; i++)
+            {
+                Semester[i, 0] = "";
+                Semester[i, 1] = "";
+                Semester[i, 2] = "";
+                Semester[i, 3] = "";
+            }
+            string[,] FeeDetails = new string[ds.Tables[0].Rows.Count, 7];
+            for (int i = 0; i < ds.Tables[0].Rows.Count; i++)
+            {
+                FeeDetails[i, 0] = "";
+                FeeDetails[i, 1] = "";
+                FeeDetails[i, 2] = "";
+                FeeDetails[i, 3] = "";
+                FeeDetails[i, 4] = "";
+                FeeDetails[i, 5] = "";
+                FeeDetails[i, 6] = "";
+                FeeDetails[i, 7] = "";
+            }
+            ViewBag.Ledger = FeeDetails;
+            ViewBag.SemesterData = Semester;
+            ViewBag.Degree = DegreeArray;
+            ViewBag.Batch = BatchArray;
+            ViewBag.Data = data;
+            int count = 0;
+            ViewBag.count = count; 
+            return View();
+        }
+        [HttpPost]
+        public ActionResult Student(FormCollection f)
+        {
+            DAL d = new DAL();
+            DataSet ds = new DataSet();
+            string degree = "Select DegreeName from Degreeinfo";
+            ds = d.Select(degree);
+            ViewBag.Drows = ds.Tables[0].Rows.Count;
+            string[,] DegreeArray = new string[ViewBag.Drows, 1];
+            for (int i = 0; i < ViewBag.Drows; i++)
+            {
+                DegreeArray[i, 0] = ds.Tables[0].Rows[i][0].ToString();
+            }
+            ds.Clear();
+            ds.Tables[0].Columns.Clear();
+            string batch = "select SemesterSession from SemesterSessionInfo";
+            ds = d.Select(batch);
+            ViewBag.Brows = ds.Tables[0].Rows.Count;
+            string[,] BatchArray = new string[ViewBag.Brows, 1];
+            for (int i = 0; i < ViewBag.Brows; i++)
+            {
+                BatchArray[i, 0] = ds.Tables[0].Rows[i][0].ToString();
+            }
+            ds.Clear();
+            ds.Tables[0].Columns.Clear();
+            ViewBag.Degree = DegreeArray;
+            ViewBag.Batch = BatchArray;
+            string B = f["Batch"];
+            string D = f["Degree"];
+            string rollNo = f["rollNo"];
+            string StdRollNo = B + "/" + D + "/" + rollNo;
+            ViewBag.roll = StdRollNo + ".PNG";
+            string s = "select StdRollNo,UETRegNo,StudentName,FatherName,NIC,Convert(varchar,DOB,106) as DOB,Gender,MailingAddress,Email,ParentEmployer,Designation,PhoneHome as GuardianPhone,PhoneMobilePrimary,DegreeID,JoiningSession,Category from studentinfo Where StdRollNo='" + StdRollNo + "'";
+            ds = d.Select(s);
+            ViewBag.total = ds.Tables[0].Rows.Count;
+            string[] array = new string[16];
+            array[0] = ds.Tables[0].Rows[0][0].ToString();
+            array[1] = ds.Tables[0].Rows[0][1].ToString();
+            array[2] = ds.Tables[0].Rows[0][2].ToString();
+            array[3] = ds.Tables[0].Rows[0][3].ToString();
+            array[4] = ds.Tables[0].Rows[0][4].ToString();
+            array[5] = ds.Tables[0].Rows[0][5].ToString();
+            array[6] = ds.Tables[0].Rows[0][6].ToString();
+            array[7] = ds.Tables[0].Rows[0][7].ToString();
+            array[8] = ds.Tables[0].Rows[0][8].ToString();
+            array[9] = ds.Tables[0].Rows[0][9].ToString();
+            array[10] = ds.Tables[0].Rows[0][10].ToString();
+            array[11] = ds.Tables[0].Rows[0][11].ToString();
+            array[12] = ds.Tables[0].Rows[0][12].ToString();
+            array[13] = ds.Tables[0].Rows[0][13].ToString();
+            array[14] = ds.Tables[0].Rows[0][14].ToString();
+            array[15] = ds.Tables[0].Rows[0][15].ToString();
+            ds.Clear();
+            ds.Tables[0].Columns.Clear();
+            s = "select SemesterSessionInfo.SemesterSession,StudentAttendancePivot.StdCourseID,CourseCode,CourseName,CreditHrs,EmpName,present,ABS,per,Student_Course_Enrollment.SemCourseID from StudentAttendancePivot right outer join Student_Course_Enrollment on StudentAttendancePivot.StdCourseID=Student_Course_Enrollment.StdCourseID inner join SemesterSessionInfo on SemesterSessionInfo.ID=Student_Course_Enrollment.SemesterSessionID Where STDRollNo='" + StdRollNo + "' order by SemesterSession";
+            ds = d.Select(s);
+            string[,] Semester = new string[ds.Tables[0].Rows.Count, 10];
+            for (int i = 0; i < ds.Tables[0].Rows.Count; i++)
+            {
+                Semester[i, 0] = ds.Tables[0].Rows[i][0].ToString();
+                Semester[i, 1] = ds.Tables[0].Rows[i][1].ToString();
+                Semester[i, 2] = ds.Tables[0].Rows[i][2].ToString();
+                Semester[i, 3] = ds.Tables[0].Rows[i][3].ToString();
+                Semester[i, 4] = ds.Tables[0].Rows[i][4].ToString();
+                Semester[i, 5] = ds.Tables[0].Rows[i][5].ToString();
+                Semester[i, 6] = ds.Tables[0].Rows[i][6].ToString();
+                Semester[i, 7] = ds.Tables[0].Rows[i][7].ToString();
+                Semester[i, 8] = ds.Tables[0].Rows[i][8].ToString();
+                Semester[i, 9] = ds.Tables[0].Rows[i][9].ToString();
+            }
+            ViewBag.SemesterData = Semester;
+            ds.Clear();
+            ds.Tables[0].Rows.Clear();
+            ds.Tables[0].Columns.Clear();
+            s = "Select  SemesterSessionID,SemesterSession,feepayable, FeeReceived, PreviousOutstanding,AdditionalFee,TotalOutstanding,FeeRemaining ,SemesterLeave from StudentRegistrationInfo inner join StudentInfo on StudentRegistrationInfo.StdRollNoID = StudentInfo.id inner join SemesterSessionInfo on SemesterSessionInfo.id = StudentRegistrationInfo.SemesterSessionID Where StdRollNo = '" + StdRollNo + "' order by SemesterSession";
+            ds = d.Select(s);
+            string[,] FeeDetails = new string[ds.Tables[0].Rows.Count, 9];
+            for (int i = 0; i < ds.Tables[0].Rows.Count; i++)
+            {
+                FeeDetails[i, 0] = ds.Tables[0].Rows[i][0].ToString();
+                FeeDetails[i, 1] = ds.Tables[0].Rows[i][1].ToString();
+                FeeDetails[i, 2] = ds.Tables[0].Rows[i][2].ToString();
+                FeeDetails[i, 3] = ds.Tables[0].Rows[i][3].ToString();
+                FeeDetails[i, 4] = ds.Tables[0].Rows[i][4].ToString();
+                FeeDetails[i, 5] = ds.Tables[0].Rows[i][5].ToString();
+                FeeDetails[i, 6] = ds.Tables[0].Rows[i][6].ToString();
+                FeeDetails[i, 7] = ds.Tables[0].Rows[i][7].ToString();
+                FeeDetails[i, 8] = ds.Tables[0].Rows[i][8].ToString();
+            }
+            ds.Clear();
+            ds.Tables[0].Rows.Clear();
+            ds.Tables[0].Columns.Clear();
+            s = "select (select SemesterSession from SemesterSessionInfo where id = MAX(SemesterSessionID)),(select (FeePayable-RebateAmount)-FeeReceived as total from StudentRegistrationInfo where StdRollNoID = (select id from StudentInfo where StdRollNo = '" + StdRollNo + "') and SemesterSessionID = max(Student_Course_Enrollment.SemesterSessionID)) from Student_Course_Enrollment where StdRollNo = '" + StdRollNo + "'";
+            ds = d.Select(s);
+            ViewBag.lastsemester = ds.Tables[0].Rows[0][0].ToString();
+            //decimal fee = Convert.ToDecimal(ds.Tables[0].Rows[0][1].ToString());
+            decimal fee = 0;
+            string defaulter = "Defaulter";
+            if (fee > 60)
+            {
+
+            }
+            else
+            {
+                defaulter = "Not A Defaulter";
+            }
+            ds.Clear();
+            ds.Tables[0].Rows.Clear();
+            ds.Tables[0].Columns.Clear();
+            s = "select LastDegree,Institute,convert(varchar,StartingYear,106) ,convert(varchar,CompletitionYear,106),Marks,TotalMarks from StudentEducationalInfo where StdInfoID = (select id from studentinfo where stdrollno = '" + StdRollNo + "')";
+            ds = d.Select(s);
+            int admcount = ds.Tables[0].Rows.Count;
+            string[,] admissioninfo = new string[0, 0];
+            if (admcount > 0)
+            {
+                admissioninfo = Double_Array_store(ds);
+            }
+            ds.Clear();
+            ds.Tables[0].Rows.Clear();
+            ds.Tables[0].Columns.Clear();
+            s = "select * from FUNCChallanInfo (49) where stdrollno = '" +StdRollNo+ "'";
+            ds = d.Select(s);
+            int count = ds.Tables[0].Rows.Count;
+            ViewBag.count = count;
+            string[,] challaninfo = new string[0, 0];
+            if (count > 0)
+            {
+                challaninfo = Double_Array_store(ds);
+            }
+            ViewBag.challan = challaninfo;
+            ViewBag.admcount = admcount;
+            ViewBag.admissioninfo = admissioninfo;
+            ViewBag.defaulter = defaulter;
+            ViewBag.StdrollNo = StdRollNo;
+            ViewBag.Ledger = FeeDetails;
+            ViewBag.SemesterData = Semester;
+            ViewBag.data = array;
+
+
+            return View();
+        }
+        public ActionResult StudentSearch(string rollnoo)
+        {
+            DAL d = new DAL();
+            DataSet ds = new DataSet();
+            string degree = "Select DegreeName from Degreeinfo";
+            ds = d.Select(degree);
+            ViewBag.Drows = ds.Tables[0].Rows.Count;
+            string[,] DegreeArray = new string[ViewBag.Drows, 1];
+            for (int i = 0; i < ViewBag.Drows; i++)
+            {
+                DegreeArray[i, 0] = ds.Tables[0].Rows[i][0].ToString();
+            }
+            ds.Clear();
+            ds.Tables[0].Columns.Clear();
+            string batch = "select SemesterSession from SemesterSessionInfo";
+            ds = d.Select(batch);
+            ViewBag.Brows = ds.Tables[0].Rows.Count;
+            string[,] BatchArray = new string[ViewBag.Brows, 1];
+            for (int i = 0; i < ViewBag.Brows; i++)
+            {
+                BatchArray[i, 0] = ds.Tables[0].Rows[i][0].ToString();
+            }
+            ds.Clear();
+            ds.Tables[0].Columns.Clear();
+            ViewBag.Degree = DegreeArray;
+            ViewBag.Batch = BatchArray;
+
+            ViewBag.roll = rollnoo + ".PNG";
+            string s = "select StdRollNo,UETRegNo,StudentName,FatherName,NIC,Convert(varchar,DOB,106) as DOB,Gender,MailingAddress,Email,ParentEmployer,Designation,PhoneHome as GuardianPhone,PhoneMobilePrimary,DegreeID,JoiningSession,Category,ClassSection from studentinfo Where StdRollNo='" + rollnoo + "'";
+            ds = d.Select(s);
+            ViewBag.total = ds.Tables[0].Rows.Count;
+            string[] array = new string[17];
+            array[0] = ds.Tables[0].Rows[0][0].ToString();
+            array[1] = ds.Tables[0].Rows[0][1].ToString();
+            array[2] = ds.Tables[0].Rows[0][2].ToString();
+            array[3] = ds.Tables[0].Rows[0][3].ToString();
+            array[4] = ds.Tables[0].Rows[0][4].ToString();
+            array[5] = ds.Tables[0].Rows[0][5].ToString();
+            array[6] = ds.Tables[0].Rows[0][6].ToString();
+            array[7] = ds.Tables[0].Rows[0][7].ToString();
+            array[8] = ds.Tables[0].Rows[0][8].ToString();
+            array[9] = ds.Tables[0].Rows[0][9].ToString();
+            array[10] = ds.Tables[0].Rows[0][10].ToString();
+            array[11] = ds.Tables[0].Rows[0][11].ToString();
+            array[12] = ds.Tables[0].Rows[0][12].ToString();
+            array[13] = ds.Tables[0].Rows[0][13].ToString();
+            array[14] = ds.Tables[0].Rows[0][14].ToString();
+            array[15] = ds.Tables[0].Rows[0][15].ToString();
+            array[16] = ds.Tables[0].Rows[0][16].ToString();
+            ds.Clear();
+            ds.Tables[0].Columns.Clear();
+            s = "select SemesterSessionInfo.SemesterSession,StudentAttendancePivot.StdCourseID,CourseCode,CourseName,CreditHrs,EmpName,present,ABS,per,Student_Course_Enrollment.SemCourseID from StudentAttendancePivot right outer join Student_Course_Enrollment on StudentAttendancePivot.StdCourseID=Student_Course_Enrollment.StdCourseID inner join SemesterSessionInfo on SemesterSessionInfo.ID=Student_Course_Enrollment.SemesterSessionID Where STDRollNo='" + rollnoo + "' order by SemesterSession";
+            ds = d.Select(s);
+            string[,] Semester = new string[ds.Tables[0].Rows.Count, 10];
+            for (int i = 0; i < ds.Tables[0].Rows.Count; i++)
+            {
+                Semester[i, 0] = ds.Tables[0].Rows[i][0].ToString();
+                Semester[i, 1] = ds.Tables[0].Rows[i][1].ToString();
+                Semester[i, 2] = ds.Tables[0].Rows[i][2].ToString();
+                Semester[i, 3] = ds.Tables[0].Rows[i][3].ToString();
+                Semester[i, 4] = ds.Tables[0].Rows[i][4].ToString();
+                Semester[i, 5] = ds.Tables[0].Rows[i][5].ToString();
+                Semester[i, 6] = ds.Tables[0].Rows[i][6].ToString();
+                Semester[i, 7] = ds.Tables[0].Rows[i][7].ToString();
+                Semester[i, 8] = ds.Tables[0].Rows[i][8].ToString();
+                Semester[i, 9] = ds.Tables[0].Rows[i][9].ToString();
+            }
+            ViewBag.SemesterData = Semester;
+            ds.Clear();
+            ds.Tables[0].Rows.Clear();
+            ds.Tables[0].Columns.Clear();
+            s = "Select  SemesterSessionID,SemesterSession,feepayable, FeeReceived, PreviousOutstanding,AdditionalFee,TotalOutstanding,FeeRemaining ,SemesterLeave from StudentRegistrationInfo inner join StudentInfo on StudentRegistrationInfo.StdRollNoID = StudentInfo.id inner join SemesterSessionInfo on SemesterSessionInfo.id = StudentRegistrationInfo.SemesterSessionID Where StdRollNo = '" + rollnoo + "' order by SemesterSession";
+            ds = d.Select(s);
+            string[,] FeeDetails = new string[ds.Tables[0].Rows.Count, 9];
+            for (int i = 0; i < ds.Tables[0].Rows.Count; i++)
+            {
+                FeeDetails[i, 0] = ds.Tables[0].Rows[i][0].ToString();
+                FeeDetails[i, 1] = ds.Tables[0].Rows[i][1].ToString();
+                FeeDetails[i, 2] = ds.Tables[0].Rows[i][2].ToString();
+                FeeDetails[i, 3] = ds.Tables[0].Rows[i][3].ToString();
+                FeeDetails[i, 4] = ds.Tables[0].Rows[i][4].ToString();
+                FeeDetails[i, 5] = ds.Tables[0].Rows[i][5].ToString();
+                FeeDetails[i, 6] = ds.Tables[0].Rows[i][6].ToString();
+                FeeDetails[i, 7] = ds.Tables[0].Rows[i][7].ToString();
+                FeeDetails[i, 8] = ds.Tables[0].Rows[i][8].ToString();
+            }
+            ds.Clear();
+            ds.Tables[0].Rows.Clear();
+            ds.Tables[0].Columns.Clear();
+            s = "select (select SemesterSession from SemesterSessionInfo where id = MAX(SemesterSessionID)),(select (FeePayable-RebateAmount)-FeeReceived as total from StudentRegistrationInfo where StdRollNoID = (select id from StudentInfo where StdRollNo = '" + rollnoo + "') and SemesterSessionID = max(Student_Course_Enrollment.SemesterSessionID)) from Student_Course_Enrollment where StdRollNo = '" + rollnoo + "'";
+            ds = d.Select(s);
+            ViewBag.lastsemester = ds.Tables[0].Rows[0][0].ToString();
+            decimal fee = Convert.ToDecimal(ds.Tables[0].Rows[0][1].ToString());
+            string defaulter = "Defaulter";
+            if (fee > 60)
+            {
+
+            }
+            else
+            {
+                defaulter = "Not A Defaulter";
+            }
+            ds.Clear();
+            ds.Tables[0].Rows.Clear();
+            ds.Tables[0].Columns.Clear();
+            s = "select LastDegree,Institute,convert(varchar,StartingYear,106) ,convert(varchar,CompletitionYear,106),Marks,TotalMarks from StudentEducationalInfo where StdInfoID = (select id from studentinfo where stdrollno = '" + rollnoo + "')";
+            ds = d.Select(s);
+            int admcount = ds.Tables[0].Rows.Count;
+            string[,] admissioninfo = new string[0, 0];
+            if (admcount > 0)
+            {
+                admissioninfo = Double_Array_store(ds);
+            }
+            ds.Clear();
+            ds.Tables[0].Rows.Clear();
+            ds.Tables[0].Columns.Clear();
+            s = "select * from FUNCChallanInfo (49) where stdrollno = '" + rollnoo + "'";
+            ds = d.Select(s);
+            int count = ds.Tables[0].Rows.Count;
+            ViewBag.count = count;
+            string[,] challaninfo = new string[0, 0];
+            if (count > 0)
+            {
+                challaninfo = Double_Array_store(ds);
+            }
+            ViewBag.challan = challaninfo;
+            ViewBag.admcount = admcount;
+            ViewBag.admissioninfo = admissioninfo;
+            ViewBag.defaulter = defaulter;
+            ViewBag.StdrollNo = rollnoo;
+            ViewBag.Ledger = FeeDetails;
+            ViewBag.SemesterData = Semester;
+            ViewBag.data = array;
+
+
+            return View();
+        }
+        [HttpPost]
+        public ActionResult AdvanceSearch(FormCollection f)
+        {
+            string id = f["id"];
+            return RedirectToAction("newaward", "exam", new { @id = id });
+        }
+        public ActionResult IGRADEAPPLICATIONS(string status)
+        {
+            DAL d10 = new DAL();
+            DataSet submitlist = new DataSet();
+            if (status == "E")
+            {
+                string s_list = "SElect * from IGRADE_MARKS_ENROLLMENT where GRADE = 'I'";
+                submitlist = d10.Select(s_list);
+            }
+            else if (status == "P")
+            {
+                string s_list = "SElect * from IGRADE_MARKS_ENROLLMENT where GRADE = 'I' and IGDID IS NULL";
+                submitlist = d10.Select(s_list);
+            }
+            else if (status == "U")
+            {
+                string s_list = "SElect * from IGRADE_MARKS_ENROLLMENT where GRADE = 'I' and IGDID IS NOT NULL";
+                submitlist = d10.Select(s_list);
+            }
+            string[,] coursedetail = Double_Array_store(submitlist);
+            ViewBag.Submit_listdetail = coursedetail;
+            return View();
+        }
+        public ActionResult SubmittedResultListCoE(string status, string Statuss)
+        {
+            DAL d10 = new DAL();
+            DataSet submitlist = new DataSet();
+            if (status == null)
+            {
+                string s_list = "select CourseinfoAll.ID,CourseinfoAll.CourseCode,CourseinfoAll.CourseName,CourseinfoAll.CreditHrs,CourseinfoAll.InstructorName,DegreeInfo.DegreeName,CourseinfoAll.HOD,convert(varchar,coursesubmissionstatus.DAT,109)  from CourseinfoAll inner join SemesterCoursesInfo on SemesterCoursesInfo.id = CourseinfoAll.id inner join DegreeBatchInfo on DegreeBatchInfo.id = SemesterCoursesInfo.DegreeBatchID  inner join DegreeInfo on DegreeInfo.id = DegreeBatchInfo.DegreeID inner join Departments on Departments.id = DegreeInfo.DepartmentID inner join Faculty on Faculty.ID = Departments.Faculty inner join FacultyInfo on FacultyInfo.id = Departments.HoD  or Faculty.DeanID = FacultyInfo.id left outer join coursesubmissionstatus on coursesubmissionstatus.id = CourseinfoAll.id where FacultyInfo.uid = '" + Session["UID"].ToString() + "' and CourseinfoAll.SemesterSessionID  = " + Session["Semsessionno"].ToString() + " and coursesubmissionstatus.Status is null";
+                submitlist = d10.Select(s_list);
+            }
+            else
+            {
+                string s_list = "select CourseinfoAll.ID,CourseinfoAll.CourseCode,CourseinfoAll.CourseName,CourseinfoAll.CreditHrs,CourseinfoAll.InstructorName,DegreeInfo.DegreeName,CourseinfoAll.HOD,convert(varchar,coursesubmissionstatus.DAT,109)  from CourseinfoAll inner join SemesterCoursesInfo on SemesterCoursesInfo.id = CourseinfoAll.id inner join DegreeBatchInfo on DegreeBatchInfo.id = SemesterCoursesInfo.DegreeBatchID  inner join DegreeInfo on DegreeInfo.id = DegreeBatchInfo.DegreeID inner join Departments on Departments.id = DegreeInfo.DepartmentID inner join Faculty on Faculty.ID = Departments.Faculty inner join FacultyInfo on FacultyInfo.id = Departments.HoD  or Faculty.DeanID = FacultyInfo.id left outer join coursesubmissionstatus on coursesubmissionstatus.id = CourseinfoAll.id where FacultyInfo.uid = '" + Session["UID"].ToString() + "' and CourseinfoAll.SemesterSessionID  = " + Session["Semsessionno"].ToString() + " and coursesubmissionstatus.Status = '" + status + "'";
+                submitlist = d10.Select(s_list);
+            }
+            string[,] coursedetail = Double_Array_store(submitlist);
+            ViewBag.Submit_listdetail = coursedetail;
+            return View();
+        }
+        public ActionResult SubmittedResultList(string status)
+        {
+            DAL d10 = new DAL();
+            DataSet submitlist = new DataSet();
+            if (status == null)
+            {
+                string s_list = "select CourseinfoAll.ID,CourseinfoAll.CourseCode,CourseinfoAll.CourseName,CourseinfoAll.CreditHrs,CourseinfoAll.InstructorName,DegreeInfo.DegreeName,CourseinfoAll.HOD,convert(varchar,coursesubmissionstatus.DAT,109)  from CourseinfoAll inner join SemesterCoursesInfo on SemesterCoursesInfo.id = CourseinfoAll.id inner join DegreeBatchInfo on DegreeBatchInfo.id = SemesterCoursesInfo.DegreeBatchID  inner join DegreeInfo on DegreeInfo.id = DegreeBatchInfo.DegreeID inner join Departments on Departments.id = DegreeInfo.DepartmentID  left outer join coursesubmissionstatus on coursesubmissionstatus.id = CourseinfoAll.id where  CourseinfoAll.SemesterSessionID  = " + Session["Semsessionno"].ToString() + " and coursesubmissionstatus.Status is null";
+                submitlist = d10.Select(s_list);
+            }
+            else
+            {
+                string s_list = "select CourseinfoAll.ID,CourseinfoAll.CourseCode,CourseinfoAll.CourseName,CourseinfoAll.CreditHrs,CourseinfoAll.InstructorName,DegreeInfo.DegreeName,CourseinfoAll.HOD,convert(varchar,coursesubmissionstatus.DAT,109)  from CourseinfoAll inner join SemesterCoursesInfo on SemesterCoursesInfo.id = CourseinfoAll.id inner join DegreeBatchInfo on DegreeBatchInfo.id = SemesterCoursesInfo.DegreeBatchID  inner join DegreeInfo on DegreeInfo.id = DegreeBatchInfo.DegreeID inner join Departments on Departments.id = DegreeInfo.DepartmentID left outer join coursesubmissionstatus on coursesubmissionstatus.id = CourseinfoAll.id where CourseinfoAll.SemesterSessionID  = " + Session["Semsessionno"].ToString() + " and coursesubmissionstatus.Status = '" + status + "'";
+                submitlist = d10.Select(s_list);
+            }
+            string[,] coursedetail = Double_Array_store(submitlist);
+            ViewBag.Submit_listdetail = coursedetail;
+            return View();
+        }
+        public ActionResult Report()
+        {
+            DAL d = new DAL();
+            enrollment_ds ds = new enrollment_ds();
+            ReportViewer reportViewer = new ReportViewer();
+            reportViewer.ProcessingMode = ProcessingMode.Local;
+            reportViewer.SizeToReportContent = true;
+            reportViewer.Width = Unit.Percentage(100);
+            reportViewer.Height = Unit.Percentage(100);
+            string s = "select SemCourseID,StdRollNo,StudentName,FatherName,CourseCode,CourseName,CreditHrs,DegreeID,DName,JoiningSession,ClassSection,EmpName,Email,ContactNo,HoD_Name,HOD_CONTACT,'" + Session["Semsession"].ToString() + "' as Enrollment from Student_Course_Enrollment where SemesterSessionID = '" + Session["Semsessionno"].ToString() + "'  ";
+            SqlDataAdapter adp = new SqlDataAdapter(s, d.conn);
+            adp.Fill(ds);
+            reportViewer.LocalReport.ReportPath = Request.MapPath(Request.ApplicationPath) + @"Report3.rdlc";
+            reportViewer.LocalReport.DataSources.Add(new ReportDataSource("DataSet1", ds.Tables[1]));
+            ViewBag.ReportViewer = reportViewer;
+            return View();
+        }
+        public ActionResult IGRADEHOD(string status)
+        {
+            ViewBag.access = "False";
+            if (status == Session["App"].ToString())
+            {
+                ViewBag.access = "True";
+            }
+            DAL d = new DAL();
+            DataSet ds = new DataSet();
+            string s = "select Student_Igrade.id AS GRAD_ID,StudentName,StdRollNo,Student_Igrade.Remarks,Student_Igrade.Reason,CourseCode,CourseName ,per,Stdcourseinfoid,(Select Attendance from currentsessioninfo), coursecode, semcourseid, classsection,joiningsession from Student_Igrade inner join Student_Course_Enrollment on Student_Course_Enrollment.STDCOURSEID = Student_Igrade.Stdcourseinfoid inner join StudentAttendancePivot on StudentAttendancePivot.StdCourseID = Student_Igrade.Stdcourseinfoid inner join DegreeInfo on DegreeInfo.DegreeName=Student_Course_Enrollment.DegreeID inner join Departments on Departments.ID=DegreeInfo.DepartmentID inner join Faculty on Faculty.id = Departments.Faculty inner join FacultyInfo on FacultyInfo.ID=Departments.HoD  where Student_Igrade.[Type] =(Select CurrentSessionInfo.Igrade from CurrentSessionInfo) and   Student_igrade.Status='" + status + "' and SemesterSessionID=(select ID from CurrentSessionInfo inner join SemesterSessionInfo on CurrentSessionInfo.Exam_session = Semestersessioninfo.Semestersession) ";
+            ds = d.Select(s);
+            int c2 = ds.Tables[0].Rows.Count;
+            string[,] Course_d = new string[c2, 14];
+            for (int y = 0; y < c2; y++)
+            {
+                Course_d[y, 0] = ds.Tables[0].Rows[y][0].ToString();
+                Course_d[y, 1] = ds.Tables[0].Rows[y][1].ToString();
+                Course_d[y, 2] = ds.Tables[0].Rows[y][2].ToString();
+                Course_d[y, 3] = ds.Tables[0].Rows[y][3].ToString();
+                Course_d[y, 4] = ds.Tables[0].Rows[y][4].ToString();
+                Course_d[y, 5] = ds.Tables[0].Rows[y][5].ToString();
+                Course_d[y, 6] = ds.Tables[0].Rows[y][6].ToString();
+                Course_d[y, 7] = ds.Tables[0].Rows[y][7].ToString();
+                Course_d[y, 8] = ds.Tables[0].Rows[y][8].ToString();
+                Course_d[y, 9] = ds.Tables[0].Rows[y][9].ToString();
+                Course_d[y, 10] = ds.Tables[0].Rows[y][10].ToString();
+                Course_d[y, 11] = ds.Tables[0].Rows[y][11].ToString();
+                Course_d[y, 12] = ds.Tables[0].Rows[y][12].ToString();
+                Course_d[y, 13] = ds.Tables[0].Rows[y][13].ToString();
+            }
+            ViewBag.course = Course_d;
+            ViewBag.count = c2;
+            ViewBag.status = status;
+            return View();
+        }
+        public string[,] Double_Array_store(DataSet ds)
+        {
+            string[,] final;
+            int r = ds.Tables[0].Rows.Count;
+            int c = ds.Tables[0].Columns.Count;
+            if (r == 0)
+            {
+                r = 1;
+                final = new string[r, c];
+                for (int i = 0; i < r; i++)
+                {
+                    for (int j = 0; j < c; j++)
+                    {
+                        final[i, j] = null;
+                    }
+                }
+            }
+            else
+            {
+                final = new string[r, c];
+                for (int i = 0; i < r; i++)
+                {
+                    for (int j = 0; j < c; j++)
+                    {
+                        final[i, j] = ds.Tables[0].Rows[i][j].ToString();
+                    }
+                }
+            }
+            return final;
+        }
+        public string[,] Array_store(DataTable dt)
+        {
+            int c = dt.Columns.Count;
+            int r = dt.Rows.Count;
+            string[,] final = new string[r + 1, c];
+            for (int i = 0; i < c; i++)
+            {
+                final[0, i] = dt.Columns[i].ToString();
+                for (int j = 0; j < r; j++)
+                {
+                    final[j + 1, i] = dt.Rows[j][i].ToString();
+                }
+            }
+            return final;
+        }
+        public ActionResult EnrollmentDetail()
+        {
+            DAL d = new DAL();
+            DataSet ds = new DataSet();
+            string s = "select distinct B from (select distinct StudentInfo.DegreeID + ' / ' + StudentInfo.JoiningSession + ' - ' + StudentInfo.ClassSection B  From Student_Course_Enrollment inner join StudentInfo on StudentInfo.id = Student_Course_Enrollment.STDRollNoID where SemesterSessionID = 49  and ( DName like 'Management %' or DName like 'DFRSC %')) as T ";
+            ds = d.Select(s);
+            string[,] a = Double_Array_store(ds);
+            ViewBag.a = a;
+            return View();
+        }
+        [HttpPost]
+        public ActionResult EnrollmentDetail(FormCollection f)
+        {
+            DAL d1 = new DAL();
+            DataSet ds1 = new DataSet();
+            string s1 = "select distinct B from (select distinct StudentInfo.DegreeID + ' / ' + StudentInfo.JoiningSession + ' - ' + StudentInfo.ClassSection B  From Student_Course_Enrollment inner join StudentInfo on StudentInfo.id = Student_Course_Enrollment.STDRollNoID where SemesterSessionID = 49  and ( DName like 'Management %' or DName like 'DFRSC %')) as T ";
+            ds1 = d1.Select(s1);
+            string[,] a = Double_Array_store(ds1);
+            ViewBag.a = a;
+            DAL d = new DAL();
+            Slip ds = new Slip();
+            string na = f["val"];
+            ReportViewer reportViewer = new ReportViewer();
+            reportViewer.ProcessingMode = ProcessingMode.Local;
+            reportViewer.SizeToReportContent = true;
+            reportViewer.Width = Unit.Percentage(100);
+            reportViewer.Height = Unit.Percentage(100);
+            string s = " select * from (select distinct StudentInfo.StdRollNo, StudentInfo.StudentName, StudentInfo.ClassSection, StudentInfo.JoiningSession, StudentInfo.DegreeID, DName, StudentInfo.DegreeID + ' / ' + StudentInfo.JoiningSession + ' - ' + StudentInfo.ClassSection B  From Student_Course_Enrollment inner join StudentInfo on StudentInfo.id = Student_Course_Enrollment.STDRollNoID where SemesterSessionID = 49  and ( DName like 'Management %' or DName like 'DFRSC %')) as t where b = '"+na+"'";
+           
+            SqlDataAdapter da;
+            da = new SqlDataAdapter(s, d.conn);
+            da.Fill(ds.Tables["EnrollmentDetail"]);
+            
+            reportViewer.LocalReport.ReportPath = Request.MapPath(Request.ApplicationPath) + @"/RPT/RPTStudentDetail.rdlc";
+            reportViewer.LocalReport.DataSources.Add(new ReportDataSource("DataSet1", ds.Tables["EnrollmentDetail"]));
+            reportViewer.SizeToReportContent = true;
+            reportViewer.Width = Unit.Percentage(100);
+            reportViewer.Height = Unit.Percentage(100);
+            TempData["REPORT"] = reportViewer;
+
+            return View();
+        }
+    }
+}
+
