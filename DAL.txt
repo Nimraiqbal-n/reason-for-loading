@@ -1,0 +1,135 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Web;
+using System.Data;
+using System.Data.SqlClient;
+using System.Xml;
+
+namespace FACULTY_PORTAL.Models
+{
+    public class DAL
+    {
+        // Database connection string
+        public SqlConnection conn = new SqlConnection("Data Source=119.156.25.12;Initial Catalog=LGU_MISDB;Persist Security Info=True;User ID=invalidelgu;Password=DFRSC@Testing@erp@(121122); Max Pool Size=20000");
+
+        public SqlTransaction objTrans = null;
+        public SqlCommand comm = new SqlCommand();
+        public SqlDataAdapter da;
+        public DataSet ds = new DataSet();
+
+        public DataSet Select(string s)
+        {
+            ds.Clear();
+            ds.Tables.Clear();
+            da = new SqlDataAdapter(s, conn);
+            da.SelectCommand.Transaction = objTrans;
+            da.SelectCommand.CommandTimeout = 1520;
+            da.Fill(ds);
+            return ds;
+        }
+
+        public DataSet SelectSecure(string query, SqlParameter[] parameters)
+        {
+            conn.Open();
+            var cmd = new SqlCommand(query, conn);
+            cmd.CommandTimeout = 320;
+            if (parameters != null)
+            {
+                cmd.Parameters.AddRange(parameters);
+            }
+            var da = new SqlDataAdapter(cmd);
+            da.Fill(ds);
+            conn.Close();
+            return ds;
+        }
+
+        public DataSet ExecuteQuery(string query, params SqlParameter[] parameters)
+        {
+            DataSet result = new DataSet();
+            try
+            {
+                conn.Open();
+                var cmd = new SqlCommand(query, conn);
+                cmd.CommandTimeout = 320;
+                if (parameters != null)
+                {
+                    cmd.Parameters.AddRange(parameters);
+                }
+                var adapter = new SqlDataAdapter(cmd);
+                adapter.Fill(result);
+            }
+            finally
+            {
+                conn.Close();
+            }
+            return result;
+        }
+
+        public void conn_open()
+        {
+            conn.Open();
+        }
+
+        public void conn_close()
+        {
+            conn.Close();
+        }
+
+        public void savepoint()
+        {
+            objTrans = conn.BeginTransaction();
+        }
+
+        public void Commit()
+        {
+            objTrans.Commit();
+        }
+
+        public void Rollback()
+        {
+            objTrans.Rollback();
+        }
+
+        public void command(string s)
+        {
+            comm.Connection = conn;
+            comm.CommandText = s;
+            comm.ExecuteNonQuery();
+        }
+
+        public string command2(string s)
+        {
+            comm.Connection = conn;
+            comm.CommandText = s;
+            string modified = comm.ExecuteScalar().ToString();
+            return modified;
+        }
+
+        public XmlReader command_XML(string s)
+        {
+            XmlReader xr;
+            comm.Connection = conn;
+            comm.CommandText = s;
+            xr = comm.ExecuteXmlReader();
+            xr.Read();
+            return xr;
+        }
+
+        public string[,] Array_Store(DataSet DS)
+        {
+            string[,] final;
+            int r = DS.Tables[0].Rows.Count;
+            int c = DS.Tables[0].Columns.Count;
+            final = new string[r, c];
+            for (int i = 0; i < r; i++)
+            {
+                for (int j = 0; j < c; j++)
+                {
+                    final[i, j] = DS.Tables[0].Rows[i][j].ToString();
+                }
+            }
+            return final;
+        }
+    }
+}
